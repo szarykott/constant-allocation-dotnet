@@ -11,64 +11,54 @@ using ProtoBuf;
 using Microsoft.IO;
 using System.Buffers;
 using System;
+using zero_allocation_app.ser;
+using BenchmarkDotNet.Jobs;
 
 namespace zero_allocation_app.bench {
 
     [MemoryDiagnoser]
-    // [SimpleJob(RunStrategy.Throughput, warmupCount : 2, targetCount: 5)]
     [GcServer(true)]
+    [SimpleJob(RuntimeMoniker.NetCoreApp50)]
     public class SerializationBenchmarks {
 
-        private List<Model> _models;
-        private RecyclableMemoryStreamManager _streamManager;
+        private List<SimpleModel> _models;
+
+        [Params(100, 10_000, 100_000)]
+        public int Size;
 
         [GlobalSetup]
         public void Setup() {
-            _models = new List<Model>();
-            for (var i = 0; i < 10_000; i++) {
-                _models.Add(Model.GenerateRandomModel());
+            _models = new List<SimpleModel>();
+            for (var i = 0; i < 100; i++) {
+                _models.Add(SimpleModel.GetModel(Size));
             }
-            _streamManager = new RecyclableMemoryStreamManager();
         }
 
         [Benchmark]
         public void Naive() {
             foreach (var model in _models) {
-                using (var stream = new MemoryStream()) {
-                    Serializer.Serialize(stream, model);
-                    var bytes = stream.ToArray();
-                    Nop(bytes);
-                }
+                using var bytes = Serialization.Naive(model);
+                Nop(bytes.Bytes);
             }
         }
 
         [Benchmark]
         public void RecyclableStream() {
             foreach (var model in _models) {
-                using (var stream = _streamManager.GetStream()) {
-                    Serializer.Serialize(stream, model);
-                    var bytes = stream.ToArray();
-                    Nop(bytes);
-                }
+                using var bytes = Serialization.RecyclableStream(model);
+                Nop(bytes.Bytes);
             }
         }
 
         [Benchmark]
         public void RecyclableStreamWithArrayPool() {
             foreach (var model in _models) {
-                using (var stream = _streamManager.GetStream()) {
-                    Serializer.Serialize(stream, model);
-                    var len = (int)stream.Length;
-                    var buffer = ArrayPool<byte>.Shared.Rent(len);
-                    stream.Read(buffer, 0, len);
-                    var mem = buffer.AsMemory<byte>(0, len);
-                    Nop(mem);
-                    ArrayPool<byte>.Shared.Return(buffer);
-                }
+                using var bytes = Serialization.RecyclableStreamWithArrayPool(model);
+                Nop(bytes.Bytes);
             }
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
-        public void Nop(Memory<byte> obj) { }
+        public void Nop(ReadOnlyMemory<byte> obj) { }
     }
 }
